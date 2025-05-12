@@ -1,68 +1,42 @@
 from flask import Flask, render_template, request
-from transformers import AutoTokenizer, AutoModelForQuestionAnswering
-import torch
-from config import MODEL_NAME
+import google.generativeai as genai
+import markdown
+import os
+from dotenv import load_dotenv
 
-# Initialize Flask application
+from config import MODEL_NAME  
+
 app = Flask(__name__)
 
-model_name = "mrohith29/physisolver-gpt2"
+# Load environment variables from .env file
+load_dotenv()
 
-# Load tokenizer and model for question answering
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModelForQuestionAnswering.from_pretrained(MODEL_NAME)
+# Set up Gemini
+GOOGLE_API_KEY = os.getenv("gemini_api")
+if not GOOGLE_API_KEY:
+    raise ValueError("GOOGLE_API_KEY not found in environment variables")
 
-# Ensure that the pad_token is set (required for model padding)
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
+genai.configure(api_key=GOOGLE_API_KEY)
+
+model = genai.GenerativeModel("gemini-2.0-flash")
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    answer = None  # Initialize the answer variable
+    answer = None
 
     if request.method == "POST":
-        # Retrieve the user's question from the form input
         question = request.form["question"].strip()
+        prompt = f"Q: {question} for this question generate response in detail in about 5-10 lines and after explanation, append the main concept and formula used as a summary in a new pargraph and highlight the formula in a Box\nA:"
 
-        # Simple physics context for the QA model
-        context = """
-        Newton's first law states that an object will remain at rest or in uniform motion unless acted upon by an external force.
-        Newton's second law states that force is equal to mass times acceleration (F = ma).
-        The speed of light in a vacuum is approximately 299,792 kilometers per second.
-        Energy is the capacity to do work. The most common form of energy is mechanical energy, which includes both kinetic energy and potential energy.
-        """
+        try:
+            response = model.generate_content(prompt)
+            markdown_text = response.text.strip()
+            answer = markdown.markdown(markdown_text)
+        except Exception as e:
+            answer = f"<p>Error: {str(e)}</p>"
 
-        # Tokenize the input question and context
-        inputs = tokenizer.encode_plus(
-            question,
-            context,
-            return_tensors="pt",  # Return PyTorch tensors
-            padding="max_length",  # Pad sequences to max_length
-            max_length=512,  # Limit input length
-            truncation=True  # Truncate longer inputs
-        )
-
-        # Extract input_ids and attention_mask
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
-
-        # Forward pass through the model to get the start and end positions of the answer
-        with torch.no_grad():
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-            start_scores = outputs.start_logits
-            end_scores = outputs.end_logits
-
-        # Get the most likely start and end tokens for the answer
-        start_token = torch.argmax(start_scores)
-        end_token = torch.argmax(end_scores)
-
-        # Decode the answer from the tokens
-        answer_tokens = input_ids[0][start_token:end_token + 1]
-        answer = tokenizer.decode(answer_tokens, skip_special_tokens=True)
-
-    # Render the result in the template (index.html)
     return render_template("index.html", answer=answer)
 
-# Run the app in debug mode
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
+
